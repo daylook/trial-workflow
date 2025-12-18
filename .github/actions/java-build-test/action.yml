@@ -1,0 +1,86 @@
+name: 'Java Build and Test'
+description: 'Build, test, and lint Java application with Gradle'
+
+inputs:
+  java-version:
+    description: 'Java version to use'
+    required: true
+  working-directory:
+    description: 'Working directory for the Java project'
+    required: true
+  upload-coverage:
+    description: 'Upload coverage to Codecov'
+    required: false
+    default: 'false'
+  artifact-name:
+    description: 'Name for the JAR artifact'
+    required: false
+    default: 'app-jar'
+  run-tests:
+    description: 'Run tests during build'
+    required: false
+    default: 'true'
+
+outputs:
+  jar-path:
+    description: 'Path to the compiled JAR'
+    value: ${{ steps.set-outputs.outputs.jar-path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up JDK
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ inputs.java-version }}
+        distribution: 'temurin'
+
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v3
+      with:
+        gradle-version: wrapper
+
+    - name: Grant execute permission for gradlew
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: chmod +x ./gradlew
+
+    - name: Build with Gradle
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        if [ "${{ inputs.run-tests }}" == "true" ]; then
+          ./gradlew build --no-daemon
+        else
+          ./gradlew build -x test --no-daemon
+        fi
+
+    - name: Run Tests and Generate Coverage
+      if: inputs.run-tests == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        ./gradlew test jacocoTestReport --no-daemon || true
+
+    - name: Upload coverage to Codecov
+      if: inputs.upload-coverage == 'true' && inputs.run-tests == 'true'
+      uses: codecov/codecov-action@v4
+      with:
+        files: ./${{ inputs.working-directory }}/build/reports/jacoco/test/jacocoTestReport.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+
+    - name: Upload JAR artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.working-directory }}/build/libs/*.jar
+        retention-days: 1
+
+    - name: Set outputs
+      id: set-outputs
+      shell: bash
+      run: |
+        JAR_FILE=$(find ${{ inputs.working-directory }}/build/libs/ -name "*.jar" | head -n 1)
+        echo "jar-path=$JAR_FILE" >> $GITHUB_OUTPUT

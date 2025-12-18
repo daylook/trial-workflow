@@ -1,0 +1,54 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: web-app-staging
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app: web-app
+    environment: staging
+spec:
+  project: web-app-project
+
+  source:
+    repoURL: https://github.com/daylook/trial-workflow
+    targetRevision: develop  # Use develop branch for staging
+    path: helm/web-app
+
+    helm:
+      valueFiles:
+        - values.yaml  # Use default values for staging
+
+      parameters:
+        - name: image.repository
+          value: YOUR_AWS_ACCOUNT_ID.dkr.ecr.eu-central-1.amazonaws.com/web-app
+        - name: image.tag
+          value: staging-latest
+        - name: replicaCount
+          value: "1"  # Fewer replicas for staging
+        - name: autoscaling.enabled
+          value: "false"  # Disable autoscaling in staging
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: staging
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+
+    syncOptions:
+      - CreateNamespace=true
+      - PruneLast=true
+
+    retry:
+      limit: 3
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 2m
+
+  revisionHistoryLimit: 5

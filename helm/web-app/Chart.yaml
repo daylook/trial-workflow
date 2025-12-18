@@ -1,0 +1,16 @@
+apiVersion: v2
+name: web-app
+description: A Helm chart for deploying Java application to EKS
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - java
+  - gradle
+  - web-app
+  - eks
+maintainers:
+  - name: DevOps Team
+home: https://github.com/daylook/trial-workflow
+sources:
+  - https://github.com/daylook/trial-workflow/tree/main/web-app

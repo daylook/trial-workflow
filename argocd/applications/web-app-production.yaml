@@ -1,0 +1,74 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: web-app-production
+  namespace: argocd
+  # Finalizer ensures proper cleanup
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app: web-app
+    environment: production
+spec:
+  # Reference to the AppProject
+  project: web-app-project
+
+  # Source: Git repository containing Helm charts
+  source:
+    repoURL: https://github.com/daylook/trial-workflow
+    targetRevision: main
+    path: helm/web-app
+
+    # Helm specific configuration
+    helm:
+      # Use values file for production
+      valueFiles:
+        - values-production.yaml
+
+      # Override specific values (these take precedence over values files)
+      # Update these when new images are pushed by CI/CD
+      parameters:
+        - name: image.repository
+          value: YOUR_AWS_ACCOUNT_ID.dkr.ecr.eu-central-1.amazonaws.com/web-app
+        - name: image.tag
+          value: latest  # Will be updated by CI/CD or manually
+        - name: replicaCount
+          value: "2"
+
+  # Destination: Where to deploy
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: production
+
+  # Sync policy
+  syncPolicy:
+    # Automated sync configuration
+    automated:
+      # Automatically sync when Git changes are detected
+      prune: true        # Remove resources that are no longer defined in Git
+      selfHeal: true     # Automatically sync if cluster state differs from Git
+      allowEmpty: false  # Prevent deletion of all resources
+
+    # Sync options
+    syncOptions:
+      - CreateNamespace=true  # Automatically create namespace if it doesn't exist
+      - PruneLast=true        # Prune resources as last step (safer)
+      - RespectIgnoreDifferences=true
+
+    # Retry configuration for failed syncs
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  # Ignore differences in certain fields (useful for generated fields)
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas  # Ignore replica count if using HPA
+
+  # Health assessment configuration
+  revisionHistoryLimit: 10

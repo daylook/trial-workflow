@@ -1,0 +1,157 @@
+name: Build and Deploy Web App
+
+on:
+  workflow_dispatch:
+  push:
+    # change the branch from main to prevent running the workflow on pushes to main
+    branches: [ no-run ]
+    paths:
+      - 'web-app/**'
+      - 'helm/web-app/**'
+      - '.github/workflows/**'
+  pull_request:
+    branches: [ no-run ]
+    paths:
+      - 'web-app/**'
+      - 'helm/web-app/**'
+      - '.github/workflows/**'
+
+env:
+  JAVA_VERSION: '21'
+  AWS_REGION: eu-central-1 
+  EKS_CLUSTER_NAME: eks-cluster 
+  ECR_REPOSITORY: web-app 
+  DOCKERHUB_REPOSITORY: dockerhub-username/web-app 
+  AWS_IAM_ROLE_ARN: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/GitHubActionsTerraformRole
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      web-app: ${{ steps.filter.outputs.web-app }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for web-app changes
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            web-app:
+              - 'web-app/**'
+              - 'helm/web-app/**'
+              - '.github/workflows/**'
+
+  ## Build and test code
+  build-and-test:
+    needs: changes
+    if: ${{ needs.changes.outputs.web-app == 'true' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build and test Java application
+        uses: ./.github/actions/java-build-test
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          working-directory: web-app
+          upload-coverage: 'false'
+          artifact-name: web-app-jar
+          run-tests: 'true'
+
+  ## Build and Push Docker Image to ECR(Option 1)
+  docker-ecr:
+    needs: build-and-test
+    uses: ./.github/workflows/reusable-deploy.yml
+    with:
+      service: web-app
+      working-directory: web-app
+      dockerfile: Dockerfile
+      aws-region: eu-central-1
+      enable-cache: true
+      concurrency-group: web-app-docker-build
+      # Image will be tagged with commit SHA (github.sha)
+    secrets: inherit
+
+  ## Build and Push Docker Image to Docker Hub (Option 2)
+  # docker-hub:
+  #   needs: build-and-test
+  #   runs-on: ubuntu-latest
+  #   outputs:
+  #     image-tag: ${{ steps.docker-push.outputs.image-tag }}
+  #     image-uri: ${{ steps.docker-push.outputs.image-uri }}
+  #     all-tags: ${{ steps.docker-push.outputs.all-tags }}
+
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
+
+  #     - name: Build and push to Docker Hub
+  #       id: docker-push
+  #       uses: ./.github/actions/docker-build-push-hub
+  #       with:
+  #         dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+  #         dockerhub-token: ${{ secrets.DOCKERHUB_TOKEN }}
+  #         repository: ${{ env.DOCKERHUB_REPOSITORY }}
+  #         working-directory: web-app
+  #         image-tag: ${{ github.sha }}
+  #         dockerfile: Dockerfile
+  #         enable-cache: 'true'
+  #         push-latest: ${{ github.ref == 'refs/heads/main' }}
+  #         additional-tags: ${{ github.ref_name }}
+
+  ## Update Helm Chart with new image tag (GitOps approach)
+  update-helm-chart:
+    needs: [docker-ecr]
+    # Only update chart on push to main branch (not on PRs)
+    if: github.event_name == 'push' && github.ref_name == 'main'
+    uses: ./.github/workflows/reusable-gitops-update.yml
+    with:
+      service: web-app
+      image-tag: ${{ github.sha }}
+      helm-values-file: helm/web-app/values-production.yaml
+      argocd-app-file: argocd/applications/web-app-production.yaml
+      update-argocd: true
+      concurrency-group: web-app-gitops-update
+    secrets: inherit
+
+  ## Deploy to EKS with Helm (Direct deployment alternative)
+  deploy:
+    needs: docker-ecr
+    runs-on: ubuntu-latest
+    # Only deploy on push to main branch (not on PRs)
+    if: github.event_name == 'push' && github.ref_name == 'main'
+    permissions:
+      id-token: write  # Required for AWS OIDC
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          role-arn: ${{ env.AWS_IAM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          session-name: GitHubActionsEKSDeploySession
+
+      - name: Deploy to EKS with Helm
+        uses: ./.github/actions/eks-helm-deploy
+        with:
+          cluster-name: ${{ env.EKS_CLUSTER_NAME }}
+          aws-region: ${{ env.AWS_REGION }}
+          release-name: web-app
+          chart-path: ./helm/web-app
+          namespace: production
+          values-file: ./helm/web-app/values-production.yaml
+          image-repository: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}
+          image-tag: ${{ needs.docker-ecr.outputs.image-tag }}
+          kubectl-version: v1.33.0
+          helm-version: v3.14.0
+          timeout: 5m
+          verify-deployment: 'true'
+          deployment-name: web-app-web-app
