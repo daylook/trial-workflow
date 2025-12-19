@@ -76,48 +76,6 @@ jobs:
       # Image will be tagged with commit SHA (github.sha)
     secrets: inherit
 
-  ## Build and Push Docker Image to Docker Hub (Option 2)
-  # docker-hub:
-  #   needs: build-and-test
-  #   runs-on: ubuntu-latest
-  #   outputs:
-  #     image-tag: ${{ steps.docker-push.outputs.image-tag }}
-  #     image-uri: ${{ steps.docker-push.outputs.image-uri }}
-  #     all-tags: ${{ steps.docker-push.outputs.all-tags }}
-
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-
-  #     - name: Build and push to Docker Hub
-  #       id: docker-push
-  #       uses: ./.github/actions/docker-build-push-hub
-  #       with:
-  #         dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
-  #         dockerhub-token: ${{ secrets.DOCKERHUB_TOKEN }}
-  #         repository: ${{ env.DOCKERHUB_REPOSITORY }}
-  #         working-directory: web-app
-  #         image-tag: ${{ github.sha }}
-  #         dockerfile: Dockerfile
-  #         enable-cache: 'true'
-  #         push-latest: ${{ github.ref == 'refs/heads/main' }}
-  #         additional-tags: ${{ github.ref_name }}
-
-  ## Update Helm Chart with new image tag (GitOps approach)
-  update-helm-chart:
-    needs: [docker-ecr]
-    # Only update chart on push to main branch (not on PRs)
-    if: github.event_name == 'push' && github.ref_name == 'main'
-    uses: ./.github/workflows/reusable-gitops-update.yml
-    with:
-      service: web-app
-      image-tag: ${{ github.sha }}
-      helm-values-file: helm/web-app/values-production.yaml
-      argocd-app-file: argocd/applications/web-app-production.yaml
-      update-argocd: true
-      concurrency-group: web-app-gitops-update
-    secrets: inherit
-
   ## Deploy to EKS with Helm (Direct deployment alternative)
   deploy:
     needs: docker-ecr
